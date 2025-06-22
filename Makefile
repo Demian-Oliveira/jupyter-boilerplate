@@ -1,4 +1,5 @@
-SERVICE=jupyter_service
+SERVICE ?= jupyter_service
+PORT ?= 8085
 
 .PHONY: up down build fix shell prune
 
@@ -31,18 +32,43 @@ prune:
 
 # Opens Jupyter in the browser using the mapped host port
 open:
-	@PORT=$$(docker compose port $(SERVICE) 8085 2>/dev/null | cut -d: -f2); \
-	if [ -n "$$PORT" ]; then \
-		URL=http://localhost:$$PORT; \
-		echo "[OPEN] Opening $$URL"; \
-		sleep 1; \
-		# Linux \
-		if command -v xdg-open >/dev/null 2>&1; then xdg-open $$URL; \
-		# macOS \
-		elif command -v open >/dev/null 2>&1; then open $$URL; \
-		# Windows (Git Bash/WSL): explorer.exe opens browser but exits with code 1, so add '|| true' to ignore it. \
-		else explorer.exe $$URL || true; fi \
+	@$(open_jupyter)
+
+# === CROSS-PLATFORM URL OPENER ===
+
+define open_jupyter
+	echo "[OPEN] Resolving port for service '$(SERVICE)'..."; \
+	MAPPED_PORT=$$(docker compose port $(SERVICE) $(PORT) 2>/dev/null | cut -d: -f2); \
+	if [ -z "$$MAPPED_PORT" ]; then \
+		echo "[OPEN][ERROR] Service '$(SERVICE)' is not running or port $$PORT is not exposed."; \
+		echo "[OPEN][ERROR] Port not mapped."; exit 1; \
+	fi; \
+	echo "[ OK ] Mapped to localhost:$$MAPPED_PORT"; \
+	echo "[OPEN] Checking logs for access token..."; \
+	TOKEN=$$(docker compose logs $(SERVICE) 2>&1 | grep -oE 'token=[a-z0-9]+' | tail -n1); \
+	if [ -z "$$TOKEN" ]; then \
+		echo "[WARN] No token found. Falling back to base URL."; \
+		URL="http://localhost:$$MAPPED_PORT"; \
 	else \
-		echo "[OPEN] Container not running or port not exposed."; \
-		exit 1; \
+		echo "[ OK ] Token located"; \
+		URL="http://localhost:$$MAPPED_PORT/?$$TOKEN"; \
+	fi; \
+	echo "[ACTION] Opening $$URL"; \
+	sleep 1;  \
+	$(call open_url,$$URL)
+endef
+
+define open_url
+	if command -v xdg-open >/dev/null 2>&1; then \
+		echo "[BROWSER] Launching via: xdg-open (Linux)"; \
+		xdg-open "$1"; \
+	elif command -v powershell.exe >/dev/null 2>&1; then \
+		echo "[BROWSER] Launching via: PowerShell (Windows)"; \
+		powershell.exe -NoProfile -Command "Start-Process '$1'"; \
+	elif command -v rundll32.exe >/dev/null 2>&1; then \
+		echo "[BROWSER] Launching via: rundll32 (Windows)"; \
+		rundll32.exe url.dll,FileProtocolHandler "$1"; \
+	else \
+		echo "[FAIL] No browser launcher detected."; \
 	fi
+endef
